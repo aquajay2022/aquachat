@@ -133,6 +133,38 @@ int recv_check(struct info_struct* struct_ptr, int fd, int received_bytes){
         return received_bytes;
     }
     if (received_bytes == -1){
+        switch (errno){
+            case EBADF:
+                printf("Bad sockfd detected, removing from epoll and list\n");
+                if (remove_cleanup(struct_ptr, fd) == 0){
+                    return 0;
+                }
+                return -1;
+            case ECONNREFUSED:
+                printf("Remote host refused to allow the network connection, removing sockfd from epoll and list\n");
+                if (remove_cleanup(struct_ptr, fd) == 0){
+                    return 0;
+                }
+                return -1;
+            case EFAULT:
+                printf("Receive buffer pointer points outside the address space\n");
+                return -1;
+            case EINVAL:
+                printf("Invalid argument\n");
+                return -1;
+            case ENOTCONN:
+                printf("Socket is not connected, removing from epoll and list\n");
+                if (remove_cleanup(struct_ptr, fd) == 0){
+                    return 0;
+                }
+                return -1;
+            case ENOTSOCK:
+                printf("fd is not a sockfd, removing from epoll and list\n");
+                if (remove_cleanup(struct_ptr, fd) == 0){
+                    return 0;
+                }
+                return -1;
+        }
         printf("recv() errno: %s\n", strerror(errno));
         return -1;
     }
@@ -152,7 +184,7 @@ int send_check(struct info_struct* struct_ptr, int fd, int sent_bytes){
     if (sent_bytes == -1){
         switch (errno){
             case EBADF:
-                printf("Bad socket FD detected, removing from epoll and list\n");
+                printf("Bad sockfd detected, removing from epoll and list\n");
                 if (remove_cleanup(struct_ptr, fd) == 0){
                     return 0;
                 }
@@ -208,12 +240,6 @@ int message_handler(struct info_struct* struct_ptr, struct epoll_event event){
     return received_bytes;
 }
 
-/*int event_handler(struct info_struct* ptr, struct epoll_event event){
-    if (msg_handler(ptr, event) == -1){
-        return -1;
-    }
-    return 0;
-}*/
 //the fuck?
 void* server_init(void* ptr){
     struct info_struct* struct_ptr = ptr;
