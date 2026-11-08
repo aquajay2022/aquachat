@@ -128,45 +128,96 @@ int remove_cleanup(struct info_struct* struct_ptr, int fd){
     return 0;
 }
 
+int errno_check(struct info_struct* struct_ptr, int fd) {
+    switch (errno){
+        case EWOULDBLOCK:
+            printf("The receive operation would block (%s)\n", strerror(errno));
+            return 0;
+        case EBADF:
+            printf("Bad sockfd detected (%s), removing from epoll and list\n", strerror(errno));
+            if (remove_cleanup(struct_ptr, fd) == 0){
+                return 0;
+            }
+            return -1;
+        case ECONNREFUSED:
+            printf("Remote host refused to allow the network connection (%s), removing sockfd from epoll and list\n", strerror(errno));
+            if (remove_cleanup(struct_ptr, fd) == 0){
+                return 0;
+            }
+            return -1;
+        case ENOTCONN:
+            printf("Socket is not connected (%s), removing from epoll and list\n", strerror(errno));
+            if (remove_cleanup(struct_ptr, fd) == 0){
+                return 0;
+            }
+            return -1;
+        case ENOTSOCK:
+            printf("fd is not a sockfd (%s), removing from epoll and list\n", strerror(errno));
+            if (remove_cleanup(struct_ptr, fd) == 0){
+                return 0;
+            }
+            return -1;
+        case ECONNRESET:
+            printf("Connection reset by peer (%s), removing from epoll and list\n", strerror(errno));
+            if (remove_cleanup(struct_ptr, fd) == 0){
+                return 0;
+            }
+            return -1;
+        case EDESTADDRREQ:
+            printf("Socket is not connection-mode, no peer address is set (%s), removing from epoll and list\n", strerror(errno));
+            if (remove_cleanup(struct_ptr, fd) == 0){
+                return 0;
+            }
+            return -1;
+        case EOPNOTSUPP:
+            printf("Some bit(s) in the flags argument is invalid for this socket type (%s), removing from epoll and list\n", strerror(errno));
+            if (remove_cleanup(struct_ptr, fd) == 0){
+                return 0;
+            }
+            return -1;
+        case EPIPE:
+            printf("Connection has been terminated on the other end (%s), removing from epoll and list\n", strerror(errno));
+            if (remove_cleanup(struct_ptr, fd) == 0){
+                return 0;
+            }
+            return -1;
+        case EFAULT:
+            printf("Invalid pointer in the function argument (%s)\n", strerror(errno));
+            return -1;
+        case EINVAL:
+            printf("Invalid argument (%s)\n",  strerror(errno));
+            return -1;
+        case EINTR:
+            printf("A signal occurred before any data was transmitted (%s)\n", strerror(errno));
+            return 0;
+        case EACCES:
+            printf("Write permission is denied (%s)\n", strerror(errno));
+            return 0;
+        case EALREADY:
+            printf("Another fast open is in progress (%s)\n", strerror(errno));
+            return 0;
+        case EISCONN:
+            printf("The socket was connected, but a recipient was specified (%s)\n", strerror(errno));
+            return 0;
+        case EMSGSIZE:
+            printf("The message was too big to send or receive in one operation (%s)\n", strerror(errno));
+            return 0;
+        case ENOBUFS:
+            printf("Output queue for a network interface was full (%s)\n", strerror(errno));
+            return 0;
+        case ENOMEM:
+            printf("No memory available (%s)\n", strerror(errno));
+            return -1;
+    }
+    return 0;
+}
+
 int recv_check(struct info_struct* struct_ptr, int fd, int received_bytes){
     if (received_bytes > 0){
         return received_bytes;
     }
     if (received_bytes == -1){
-        switch (errno){
-            case EBADF:
-                printf("Bad sockfd detected, removing from epoll and list\n");
-                if (remove_cleanup(struct_ptr, fd) == 0){
-                    return 0;
-                }
-                return -1;
-            case ECONNREFUSED:
-                printf("Remote host refused to allow the network connection, removing sockfd from epoll and list\n");
-                if (remove_cleanup(struct_ptr, fd) == 0){
-                    return 0;
-                }
-                return -1;
-            case EFAULT:
-                printf("Receive buffer pointer points outside the address space\n");
-                return -1;
-            case EINVAL:
-                printf("Invalid argument\n");
-                return -1;
-            case ENOTCONN:
-                printf("Socket is not connected, removing from epoll and list\n");
-                if (remove_cleanup(struct_ptr, fd) == 0){
-                    return 0;
-                }
-                return -1;
-            case ENOTSOCK:
-                printf("fd is not a sockfd, removing from epoll and list\n");
-                if (remove_cleanup(struct_ptr, fd) == 0){
-                    return 0;
-                }
-                return -1;
-        }
-        printf("recv() errno: %s\n", strerror(errno));
-        return -1;
+        return errno_check(struct_ptr, fd);
     }
     printf("Closed socket detected, removing from epoll and list\n");
     if (remove_cleanup(struct_ptr, fd) == -1){
@@ -182,38 +233,7 @@ int send_check(struct info_struct* struct_ptr, int fd, int sent_bytes){
         return sent_bytes;
     }
     if (sent_bytes == -1){
-        switch (errno){
-            case EBADF:
-                printf("Bad sockfd detected, removing from epoll and list\n");
-                if (remove_cleanup(struct_ptr, fd) == 0){
-                    return 0;
-                }
-                return -1;
-            case ECONNRESET:
-                printf("Connection reset by peer, removing from epol and list\n");
-                if (remove_cleanup(struct_ptr, fd) == 0){
-                    return 0;
-                }
-                return -1;
-            case EINVAL:
-                printf("Invalid argument\n");
-                return 0;
-            case ENOMEM:
-                printf("No memory available\n");
-                return -1;
-            case ENOTCONN:
-                printf("Socket is not connected\n");
-                if (remove_cleanup(struct_ptr, fd) == 0){
-                    return 0;
-                }
-                return -1;
-            case ENOTSOCK:
-                printf("fd does not refer to a sockfd");
-                if (remove_cleanup(struct_ptr, fd) == 0){
-                    return 0;
-                }
-                return -1;
-        }
+        return errno_check(struct_ptr, fd);
         return -1;
     }
     return 0;
