@@ -12,8 +12,6 @@
 typedef struct info_struct{
     int sockfd;
     struct sockaddr_in sockaddr;
-    pthread_t read_send_t;
-    pthread_t recv_print_t;
 } info_struct;
 
 void ipv4_sockaddr_in_setup(struct sockaddr_in* ptr_to_struct, const char* addr, uint16_t port) {
