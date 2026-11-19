@@ -19,6 +19,9 @@ typedef struct info_struct {
     int epollfd; //I may not need this
     int connected_clients;
     struct sockaddr_in sockaddr;
+    pthread_t accept_t;
+    pthread_t server_t;
+    pthread_t terminal_t;
 } info_struct;
 
 void ipv4_sockaddr_in_setup(struct sockaddr_in* ptr_to_struct, const char* addr, uint16_t port) {
@@ -64,6 +67,7 @@ int config(struct sockaddr_in sockaddr, struct info_struct* info, uint16_t port)
         return -1;
     }
     info->sockaddr = sockaddr;
+    info->connected_clients = 0;
     for (int i = 0; i < MAX_CLIENTS; ++i) {
         info->sockfd_list[i] = -1;
     }
@@ -72,20 +76,22 @@ int config(struct sockaddr_in sockaddr, struct info_struct* info, uint16_t port)
         printf("epoll errno: %s\n", strerror(errno));
         return -1;
     }
+    info->server_t = 0;
+    info->accept_t = 0;
+    info->terminal_t = 0;
     return 0;
 }
 
 /*will probaby be ran in a seperate thread?*/
 void* accept_loop(void* ptr) {
     printf("accept_loop()\n");
-    struct info_struct* struct_ptr = ptr;
-    struct_ptr->connected_clients = 0;
+    struct info_struct* info = ptr;
     for (int i = 0; i < MAX_CLIENTS; ++i) {
         struct epoll_event event;
         event.events = EPOLLIN | EPOLLET;
-        socklen_t size = sizeof(struct_ptr->sockaddr);
+        socklen_t size = sizeof(info->sockaddr);
 
-        event.data.fd = accept(struct_ptr->sockfd, (struct sockaddr*)&struct_ptr->sockaddr, &size);
+        event.data.fd = accept(info->sockfd, (struct sockaddr*)&info->sockaddr, &size);
         if (event.data.fd == -1) {
             printf("accept_loop(): accept() errno %s\n", strerror(errno));
             return nullptr;
@@ -94,13 +100,13 @@ void* accept_loop(void* ptr) {
             printf("(lsock_settup) fcntl() errno %s\n", strerror(errno));
             return nullptr;
         }
-        struct_ptr->sockfd_list[i] = event.data.fd;
-        struct_ptr->connected_clients += 1;
+        info->sockfd_list[i] = event.data.fd;
+        info->connected_clients += 1;
         printf("Socket connection added sockfd: %i\n", event.data.fd);
 
-        if (epoll_ctl(struct_ptr->epollfd, EPOLL_CTL_ADD, event.data.fd, &event) == -1) {
+        if (epoll_ctl(info->epollfd, EPOLL_CTL_ADD, event.data.fd, &event) == -1) {
             printf("epoll_ctl errno %s\n", strerror(errno));
-            close(struct_ptr->epollfd);
+            close(info->epollfd);
             return nullptr;
         }
     }
@@ -109,19 +115,21 @@ void* accept_loop(void* ptr) {
     return ptr;
 }
 
-int remove_sock(struct info_struct* struct_ptr, int fd) {
+//close the sockfd and remove from connected list
+int remove_sock(struct info_struct* info, int fd) {
     printf("remove_sock(), sockfd: %i\n", fd);
-    if (epoll_ctl(struct_ptr->epollfd, EPOLL_CTL_DEL, fd, NULL) == -1) {
+    if (epoll_ctl(info->epollfd, EPOLL_CTL_DEL, fd, NULL) == -1) {
         printf("Couldn't remove fd from epoll, epoll_ctl errno: %s\n", strerror(errno));
         return -1;
     }
     for (int i = 0; i < MAX_CLIENTS; ++i) {
-        if (struct_ptr->sockfd_list[i] != -1 && struct_ptr->sockfd_list[i] == fd) {
+        if (info->sockfd_list[i] != -1 && info->sockfd_list[i] == fd) {
             if (close(fd) == -1) {
                 printf("close() errno: %s\n", strerror(errno));
                 return -1;
             }
-            struct_ptr->sockfd_list[i] = -1;
+            info->sockfd_list[i] = -1;
+            printf("remove_sock(): Done!\n");
             return 0;
         }
     }
@@ -129,13 +137,38 @@ int remove_sock(struct info_struct* struct_ptr, int fd) {
     return 0;
 }
 
-int recv_check(struct info_struct* info_ptr, struct epoll_event event, int received_bytes) {
+void exit_cleanup(struct info_struct* info){ //exit cleanly and cleanup
+    printf("Exiting and cleaning up!\n");
+    int accept_cancel = pthread_cancel(info->accept_t);
+    if (accept_cancel != 0){
+        printf("pthread_cancel() error number %i\n", accept_cancel);
+    }
+    int server_cancel = pthread_cancel(info->server_t);
+    if (server_cancel != 0){
+        printf("pthread_cancel() error number %i\n", server_cancel);
+    }
+    if (close(info->sockfd) == -1){ //close the initial listening sock
+        printf("close() errno: %s\n", strerror(errno));
+    }
+    /*for (int i = 0; i < MAX_CLIENTS; ++i){
+        if (remove_sock(info, info->connected_clients[i]) == -1){
+            printf("remove_sock() failed!\n");
+        }
+    }*/
+    if (close(info->epollfd) == -1){
+        printf("close() errno: %s\n", strerror(errno));
+    }
+    printf("Done! returning!\n");
+    return;
+}
+
+int recv_check(struct info_struct* info, struct epoll_event event, int received_bytes) {
     if (received_bytes == -1) {
         printf("recv() errno: %s\n", strerror(errno));
         return -1;
     }
     if (received_bytes == 0) {
-        if (remove_sock(info_ptr, event.data.fd) == -1) {
+        if (remove_sock(info, event.data.fd) == -1) {
             printf("remove_sock() called, sockfd: %i\n", event.data.fd);
             return -1;
         }
@@ -144,17 +177,16 @@ int recv_check(struct info_struct* info_ptr, struct epoll_event event, int recei
     return 0;
 }
 
-int message_handler(struct info_struct* info_ptr, struct epoll_event event) {
+int message_handler(struct info_struct* info, struct epoll_event event) {
     char message[MAX_SIZE];
     int received_bytes = recv(event.data.fd, message, sizeof(message), 0);
-    if (recv_check(info_ptr, event, received_bytes) == -1) {
+    if (recv_check(info, event, received_bytes) == -1) {
         return -1;
     }
-    
     printf("received message!: %s\n", message);
     for (int i = 0; i < MAX_CLIENTS; ++i) {
-        if (info_ptr->sockfd_list[i] != event.data.fd && info_ptr->sockfd_list[i] != -1) {
-            if (send(info_ptr->sockfd_list[i], &message, sizeof(message), 0) == -1) {
+        if (info->sockfd_list[i] != event.data.fd && info->sockfd_list[i] != -1) {
+            if (send(info->sockfd_list[i], &message, sizeof(message), 0) == -1) {
                 printf("send() errno: %s\n", strerror(errno));
                 return 0;
             }
@@ -165,52 +197,67 @@ int message_handler(struct info_struct* info_ptr, struct epoll_event event) {
 
 //the fuck?
 void* server_init(void* ptr) {
-    struct info_struct* struct_ptr = ptr;
+    struct info_struct* info = ptr;
     struct epoll_event events[MAX_CLIENTS];
     while (1) {
-        int ready_fd = epoll_wait(struct_ptr->epollfd, events, MAX_CLIENTS, -1);
+        int ready_fd = epoll_wait(info->epollfd, events, MAX_CLIENTS, -1);
         if (ready_fd == -1) {
             printf("event_handler epoll_wait() errno %s\n", strerror(errno));
             return nullptr;
         }
         printf("epoll_wait() returned %i\n", ready_fd);
         for (int i = 0; i < ready_fd; ++i) {
-            message_handler(struct_ptr, events[i]);
+            message_handler(info, events[i]);
         }
     }
-    return struct_ptr;
+    return info;
 }
 
-int all_init(struct info_struct info) {
+void* terminal_handler(void* struct_ptr){
+    struct info_struct* info = struct_ptr;
+    char terminal_input[32]; //I will keep it 32 for now, sounds cool. kek
+    while (1){
+        fgets((char* restrict)&terminal_input, sizeof(terminal_input), stdin);
+        if (terminal_input[0] == '/' && terminal_input[1] == 'e' && terminal_input[2] == 'x' && terminal_input[3] == 'i' && terminal_input[4] == 't'){
+            exit_cleanup(info);
+            return info;
+        }
+    }
+    return info;
+}
+
+int all_init(struct info_struct* info) {
     /*
-    accept_loop() - MT seperate thread
-    server_init() - MT seperate thread
+    accept_loop() - MT seperate thread (thread1)
+    server_init() - MT seperate thread (thread2)
+    terminal_handler() - MT seperate thread (thread3)
     */
-    pthread_t accept_t, server_t;
-    int thread1 = pthread_create(&accept_t, NULL, &accept_loop, &info);
+    pthread_t accept_t, server_t, terminal_t;
+    int thread1 = pthread_create(&accept_t, NULL, &accept_loop, info);
     if (thread1 != 0) {
         printf("pthread_create() return value (thread1): %i\n", thread1);
         return -1;
     }
-    int thread2 = pthread_create(&server_t, NULL, &server_init, &info);
+    int thread2 = pthread_create(&server_t, NULL, &server_init, info);
     if (thread2 != 0) {
         printf("pthread_create() return value (thread2): %i\n", thread2);
         return -1;
     }
-    int p_join = pthread_join(server_t, NULL);
+    int thread3 = pthread_create(&terminal_t, NULL, &terminal_handler, info);
+    if (thread3 != 0){
+        printf("pthread_create() return value (thread3): %i\n", thread3);
+        return -1;
+    }
+    info->accept_t = accept_t;
+    info->server_t = server_t;
+    info->terminal_t = terminal_t;
+    int p_join = pthread_join(terminal_t, NULL);
     if (p_join != 0) {
         printf("pthread_join() error code %i\n", p_join);
         return -1;
     }
     return 0;
 }
-
-/*void* terminal_input(void* struct_ptr){
-    while (1){
-        char terminal_buffer[32];
-
-    }
-}*/
 
 int main(void) {
     errno = 0;
@@ -225,7 +272,7 @@ int main(void) {
         printf("struct_config() failed\n");
         return -1;
     }
-    if (all_init(info) == -1) {
+    if (all_init(&info) == -1) {
         printf("all_init() failed\n");
         return -1;
     }
