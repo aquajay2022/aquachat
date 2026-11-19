@@ -125,7 +125,7 @@ int remove_sock(struct info_struct* struct_ptr, int fd) {
             return 0;
         }
     }
-    printf("remove_sock(): Done!\n")
+    printf("remove_sock(): Done!\n");
     return 0;
 }
 
