@@ -19,9 +19,9 @@ typedef struct info_struct {
     int epollfd; //I may not need this
     int connected_clients;
     struct sockaddr_in sockaddr;
-    pthread_t accept_t;
-    pthread_t server_t;
-    pthread_t terminal_t;
+    pthread_t thr_accept;
+    pthread_t thr_server;
+    pthread_t thr_terminal;
 } info_struct;
 
 void ipv4_sockaddr_in_setup(struct sockaddr_in* ptr_to_struct, const char* addr, uint16_t port) {
@@ -76,9 +76,9 @@ int config(struct sockaddr_in sockaddr, struct info_struct* info, uint16_t port)
         printf("epoll errno: %s\n", strerror(errno));
         return -1;
     }
-    info->server_t = 0;
-    info->accept_t = 0;
-    info->terminal_t = 0;
+    info->thr_server = 0;
+    info->thr_accept = 0;
+    info->thr_terminal = 0;
     return 0;
 }
 
@@ -139,22 +139,22 @@ int remove_sock(struct info_struct* info, int fd) {
 
 void exit_cleanup(struct info_struct* info){ //exit cleanly and cleanup
     printf("Exiting and cleaning up!\n");
-    int accept_cancel = pthread_cancel(info->accept_t);
+    int accept_cancel = pthread_cancel(info->thr_accept);
     if (accept_cancel != 0){
         printf("pthread_cancel() error number %i\n", accept_cancel);
     }
-    int server_cancel = pthread_cancel(info->server_t);
+    int server_cancel = pthread_cancel(info->thr_server);
     if (server_cancel != 0){
         printf("pthread_cancel() error number %i\n", server_cancel);
     }
     if (close(info->sockfd) == -1){ //close the initial listening sock
         printf("close() errno: %s\n", strerror(errno));
     }
-    /*for (int i = 0; i < MAX_CLIENTS; ++i){
-        if (remove_sock(info, info->connected_clients[i]) == -1){
-            printf("remove_sock() failed!\n");
-        }
-    }*/
+    for (int i = 0; i < MAX_CLIENTS; ++i){
+        if (info->sockfd_list[i] != -1){
+            close(info->sockfd_list[i]);
+        } 
+    }
     if (close(info->epollfd) == -1){
         printf("close() errno: %s\n", strerror(errno));
     }
@@ -218,8 +218,7 @@ void* terminal_handler(void* struct_ptr){
     char terminal_input[32]; //I will keep it 32 for now, sounds cool. kek
     while (1){
         fgets((char* restrict)&terminal_input, sizeof(terminal_input), stdin);
-        if (terminal_input[0] == '/' && terminal_input[1] == 'e' && terminal_input[2] == 'x' && terminal_input[3] == 'i' && terminal_input[4] == 't'){
-            exit_cleanup(info);
+        if (strncmp(terminal_input, "/exit", strlen("/exit")) == 0){
             return info;
         }
     }
@@ -232,30 +231,31 @@ int all_init(struct info_struct* info) {
     server_init() - MT seperate thread (thread2)
     terminal_handler() - MT seperate thread (thread3)
     */
-    pthread_t accept_t, server_t, terminal_t;
-    int thread1 = pthread_create(&accept_t, NULL, &accept_loop, info);
+    pthread_t thr_accept, thr_server, thr_terminal;
+    int thread1 = pthread_create(&thr_accept, NULL, &accept_loop, info);
     if (thread1 != 0) {
         printf("pthread_create() return value (thread1): %i\n", thread1);
         return -1;
     }
-    int thread2 = pthread_create(&server_t, NULL, &server_init, info);
+    int thread2 = pthread_create(&thr_server, NULL, &server_init, info);
     if (thread2 != 0) {
         printf("pthread_create() return value (thread2): %i\n", thread2);
         return -1;
     }
-    int thread3 = pthread_create(&terminal_t, NULL, &terminal_handler, info);
+    int thread3 = pthread_create(&thr_terminal, NULL, &terminal_handler, info);
     if (thread3 != 0){
         printf("pthread_create() return value (thread3): %i\n", thread3);
         return -1;
     }
-    info->accept_t = accept_t;
-    info->server_t = server_t;
-    info->terminal_t = terminal_t;
-    int p_join = pthread_join(terminal_t, NULL);
+    info->thr_accept = thr_accept;
+    info->thr_server = thr_server;
+    info->thr_terminal = thr_terminal;
+    int p_join = pthread_join(thr_terminal, NULL);
     if (p_join != 0) {
         printf("pthread_join() error code %i\n", p_join);
         return -1;
     }
+    exit_cleanup(info);
     return 0;
 }
 
